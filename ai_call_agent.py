@@ -284,12 +284,12 @@ async def trigger_gas_alert():
         return {"status": "ignored", "reason": "cooldown_active"}
 
     # HARDCODED TARGET NUMBER (Replace with actual number)
-    TARGET_NUMBER = "+923442862596"
+    TARGET_NUMBER = "+923292218467"
 
     print("⚠️ GAS ALERT RECEIVED! Initiating Call...")
 
     return await make_outbound_call(
-        customer_name="Azfar", language="en", number=TARGET_NUMBER
+        customer_name="Sarim", language="en", number=TARGET_NUMBER
     )
 
 
