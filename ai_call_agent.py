@@ -32,7 +32,7 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 NGROK_URL = os.getenv("NGROK_URL", "")
 
 # Render env mein TARGET_PHONE_NUMBER bhi set kar sakte ho
-TARGET_PHONE_NUMBER = os.getenv("TARGET_PHONE_NUMBER", "+923442862596")
+TARGET_PHONE_NUMBER = "+923442862596"
 
 
 def clean_domain(value: str) -> str:
