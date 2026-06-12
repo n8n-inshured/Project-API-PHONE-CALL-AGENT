@@ -28,12 +28,24 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 
-# Render env mein sirf domain dena, https:// nahi
-# Example: project-api-phone-call-agent.onrender.com
+# Render env mein sirf domain dena:
+# project-api-phone-call-agent.onrender.com
 NGROK_URL = os.getenv("NGROK_URL", "")
 
-# Target number .env se aayega
+# Better: Render env mein TARGET_PHONE_NUMBER set karo
+# Example: +923442862596
 TARGET_PHONE_NUMBER = "+923442862596"
+
+
+def clean_domain(value: str) -> str:
+    value = value.strip()
+    value = value.replace("https://", "")
+    value = value.replace("http://", "")
+    value = value.replace("/", "")
+    return value
+
+
+NGROK_URL = clean_domain(NGROK_URL)
 
 app = FastAPI()
 
@@ -90,10 +102,11 @@ def get_reading_age_seconds() -> Optional[int]:
     return int(time.time() - latest_gas_reading["updated_at"])
 
 
+# ---------------- ELEVENLABS CLIENT TOOL ----------------
 def get_latest_gas_reading(parameters=None):
     """
     ElevenLabs client tool.
-    AI will call this during live phone call when user asks current gas reading.
+    This must return the latest live reading from server memory.
     """
     reading = latest_gas_reading["reading"]
 
@@ -101,27 +114,55 @@ def get_latest_gas_reading(parameters=None):
     print(f"🧰 Latest reading memory: {latest_gas_reading}")
 
     if reading is None:
-        return "Current gas reading is not available yet. No live reading has been received from the device."
+        result = (
+            "Current gas reading is not available yet. "
+            "No live reading has been received from the device."
+        )
+        print(f"🧰 TOOL RESULT: {result}")
+        return result
 
     age = get_reading_age_seconds()
 
-    return (
+    result = (
         f"Current gas reading is {reading}. "
-        f"Safety level is {latest_gas_reading['level']}. "
+        f"Status is {latest_gas_reading['level']}. "
         f"Trend is {latest_gas_reading['trend']}. "
-        f"Last updated {age} seconds ago."
+        f"This is the latest live sensor reading, updated {age} seconds ago."
     )
+
+    print(f"🧰 TOOL RESULT: {result}")
+    return result
+
+
+def trigger_browser_alert(parameters):
+    message = parameters.get("message", "")
+    print(f"Triggering alert: {message}")
+    return "Alert triggered successfully"
+
+
+client_tools = ClientTools()
+client_tools.register("getLatestGasReading", get_latest_gas_reading)
+client_tools.register("triggerBrowserAlert", trigger_browser_alert)
 
 
 @app.get("/")
 async def root():
     return {
-        "message": "Twilio-ElevenLabs Integration Server",
+        "message": "Twilio-ElevenLabs Gas Sensor Server",
         "latest_reading": latest_gas_reading,
         "reading_age_seconds": get_reading_age_seconds(),
     }
 
 
+@app.get("/latest-reading")
+async def latest_reading_debug():
+    return {
+        "latest_reading": latest_gas_reading,
+        "reading_age_seconds": get_reading_age_seconds(),
+    }
+
+
+# ---------------- TWILIO INBOUND / ANSWERED CALL ----------------
 @app.post("/twilio/inbound_call")
 async def handle_incoming_call(request: Request):
     customer_name = request.query_params.get("CustomerName", "Azfar")
@@ -136,28 +177,25 @@ async def handle_incoming_call(request: Request):
         f"From={from_number}, CustomerName={customer_name}, Language={language}"
     )
 
+    if not NGROK_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="NGROK_URL / Render domain is missing in environment variables.",
+        )
+
     response = VoiceResponse()
     connect = Connect()
+
     connect.stream(
         url=f"wss://{NGROK_URL}/media-stream-eleven/{customer_name}/{language}"
     )
+
     response.append(connect)
 
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 
-# ---------------- ELEVENLABS CLIENT TOOLS ----------------
-def trigger_browser_alert(parameters):
-    message = parameters.get("message")
-    print(f"Triggering alert: {message}")
-    return "Alert triggered successfully"
-
-
-client_tools = ClientTools()
-client_tools.register("triggerBrowserAlert", trigger_browser_alert)
-client_tools.register("getLatestGasReading", get_latest_gas_reading)
-
-
+# ---------------- ELEVENLABS MEDIA STREAM ----------------
 @app.websocket("/media-stream-eleven/{customer_name}/{language}")
 async def handle_media_stream(websocket: WebSocket, customer_name: str, language: str):
     await websocket.accept()
@@ -166,45 +204,45 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
     audio_interface = TwilioAudioInterface(websocket)
     eleven_labs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-    current_reading = latest_gas_reading["reading"]
-    current_level = latest_gas_reading["level"]
-    current_trend = latest_gas_reading["trend"]
-
-    if current_reading is None:
-        first_reading_text = (
-            "I have not received a live gas reading from the device yet, "
-            "but a gas alert has been triggered."
-        )
-    else:
-        first_reading_text = (
-            f"The current live gas reading from the device is {current_reading}. "
-            f"The level is {current_level}, and the trend is {current_trend}."
-        )
-
+    # IMPORTANT:
+    # Do NOT put old gas reading in prompt or first_message.
+    # Otherwise AI may keep repeating old 183/138 reading.
     conversation_override = {
         "agent": {
             "prompt": {
                 "prompt": (
                     "You are Ahmed, a smart home gas safety assistant. "
-                    "Very important: When the user asks for the current gas reading, latest gas reading, gas level, gas pressure, or whether it is safe or dangerous, silently call the getLatestGasReading tool first. Do not say 'I am fetching', 'let me check', or 'one moment'. After the tool returns, immediately speak the returned result directly. Example answer: 'Current gas reading is 70. Safety level is SAFE. Trend is DECREASING.' "
-                    "A critical gas leak has been detected in Azfar's house. "
-                    "Speak in clear English only. Be urgent, serious, and concise. "
-                    f"At the start of this call: {first_reading_text} "
-                    "Very important: when Azfar asks about the current gas reading, "
-                    "latest gas reading, gas level, gas pressure, whether the reading "
-                    "is increasing or decreasing, or whether the situation is safe or dangerous, "
-                    "you MUST call the getLatestGasReading tool before answering. "
-                    "Do not answer gas reading questions from memory. "
-                    "Always fetch the latest live reading using getLatestGasReading first. "
-                    "Tell Azfar to turn off the gas supply if safe, avoid electrical switches, "
-                    "open windows if possible, and leave the area carefully. "
-                    "If the user says the issue is fixed, return to a calm tone."
+                    "Speak in clear English only. Be serious, concise, and direct. "
+
+                    "A gas leak alert was triggered in Azfar's house. "
+                    "The first alert reading may become old within seconds, so never treat "
+                    "the first alert reading as the current reading forever. "
+
+                    "CRITICAL RULE: Whenever the user asks for the current gas reading, "
+                    "latest gas reading, gas level, gas pressure, current sensor value, "
+                    "current status, whether it is safe, whether gas is increasing or decreasing, "
+                    "you MUST call the getLatestGasReading tool first. "
+
+                    "Do not answer current reading questions from memory. "
+                    "Do not use any old reading from the start of the call. "
+                    "Do not say 'I am fetching', 'let me check', 'one moment', "
+                    "'I will fetch', or similar filler. "
+
+                    "After the getLatestGasReading tool returns, immediately speak the returned result directly. "
+                    "Example: 'Current gas reading is 57. Status is SAFE. Trend is STABLE.' "
+
+                    "If the tool says SAFE, tell the user the current environment is safe. "
+                    "If the tool says LOW GAS LEAK, MEDIUM GAS LEAK, or HIGH / DANGEROUS GAS LEAK, "
+                    "warn the user clearly and give safety instructions. "
+
+                    "Safety instructions: avoid electrical switches, open windows if possible, "
+                    "turn off the gas supply if safe, and leave the area carefully."
                 )
             },
             "first_message": (
-                f"Hello Azfar, Ahmed speaking. A critical gas leak has been detected "
-                f"in your house. {first_reading_text} Please avoid electrical switches, "
-                f"open windows if possible, and leave the area carefully."
+                "Hello Azfar, Ahmed speaking. A gas leak alert was triggered in your house. "
+                "Please avoid electrical switches, open windows if possible, and leave the area carefully. "
+                "When you ask me for the current gas reading, I will check the live sensor reading and tell you directly."
             ),
             "language": "en",
         },
@@ -285,6 +323,18 @@ async def make_outbound_call(customer_name: str, language: str, number: str):
     if not number:
         raise HTTPException(status_code=400, detail="Target number is required.")
 
+    if not NGROK_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="NGROK_URL / Render domain is missing in environment variables.",
+        )
+
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        raise HTTPException(
+            status_code=500,
+            detail="Twilio credentials or Twilio phone number are missing.",
+        )
+
     client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
     try:
@@ -335,12 +385,13 @@ async def make_outbound_call(customer_name: str, language: str, number: str):
 async def call_status_webhook(request: Request):
     form_data = await request.form()
     call_status = form_data.get("CallStatus")
+
     print(f"Twilio Call Status Update: {call_status}")
 
     if call_status == "completed":
         call_state["last_success_time"] = time.time()
         call_state["is_active"] = False
-        print("✅ Call Completed Successfully. Muting alarms for 10 seconds.")
+        print("✅ Call Completed Successfully.")
 
     elif call_status in ["busy", "no-answer", "failed", "canceled"]:
         call_state["is_active"] = False
@@ -350,12 +401,11 @@ async def call_status_webhook(request: Request):
 
 
 # ---------------- NODEMCU ENDPOINTS ----------------
-
 @app.api_route("/update-reading", methods=["GET", "POST"])
 async def update_reading(reading: int):
     """
     NodeMCU sends live gas reading here.
-    Example: /update-reading?reading=180
+    Example: /update-reading?reading=57
     """
     save_latest_reading(reading)
 
@@ -380,7 +430,6 @@ async def update_reading(reading: int):
 async def call_status_for_nodemcu():
     """
     NodeMCU checks whether call is active.
-    User requested /call-status, not /check-call-status.
     """
     return {
         "active": call_state["is_active"],
@@ -457,7 +506,7 @@ async def trigger_gas_alert(reading: Optional[int] = None):
     )
 
     return await make_outbound_call(
-        customer_name="Sarim",
+        customer_name="Azfar",
         language="en",
         number=TARGET_PHONE_NUMBER,
     )
