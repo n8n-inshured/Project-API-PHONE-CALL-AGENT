@@ -253,7 +253,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
         },
         "tts": {
             "model_id": "eleven_multilingual_v2",
-            "voice_id": "TX3LPaxmHKxFdv7VOQHJ",
+            "voice_id": "6u6JbqKdaQy89ENzLSju",
             "output_format": "ulaw_8000",
             "voice_settings": {
                 "stability": 0.5,
