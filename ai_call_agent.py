@@ -2,6 +2,8 @@ import json
 import os
 import time
 import traceback
+from typing import Optional
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, HTTPException
 from fastapi.responses import HTMLResponse
@@ -26,10 +28,11 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 
-# Important: Render env mein sirf domain dena, https:// nahi
+# Render env mein sirf domain dena, https:// nahi
 # Example: project-api-phone-call-agent.onrender.com
-ngrok = os.getenv("NGROK_URL", "")
+NGROK_URL = os.getenv("NGROK_URL", "")
 
+# Target number .env se aayega
 TARGET_PHONE_NUMBER = "+923442862596"
 
 app = FastAPI()
@@ -40,10 +43,12 @@ class CustomerDetails(BaseModel):
     language: str
 
 
-# --- LIVE GAS READING MEMORY ---
+# ---------------- LIVE GAS READING MEMORY ----------------
 latest_gas_reading = {
-    "reading": 0,
-    "level": "UNKNOWN",
+    "reading": None,
+    "previous_reading": None,
+    "level": "NO DEVICE READING YET",
+    "trend": "UNKNOWN",
     "updated_at": 0.0,
 }
 
@@ -59,19 +64,49 @@ def get_gas_level(reading: int) -> str:
         return "HIGH / DANGEROUS GAS LEAK"
 
 
+def get_trend(previous: Optional[int], current: int) -> str:
+    if previous is None:
+        return "UNKNOWN"
+    if current > previous:
+        return "INCREASING"
+    if current < previous:
+        return "DECREASING"
+    return "STABLE"
+
+
 def save_latest_reading(reading: int):
+    previous = latest_gas_reading["reading"]
+
+    latest_gas_reading["previous_reading"] = previous
     latest_gas_reading["reading"] = reading
     latest_gas_reading["level"] = get_gas_level(reading)
+    latest_gas_reading["trend"] = get_trend(previous, reading)
     latest_gas_reading["updated_at"] = time.time()
 
 
+def get_reading_age_seconds() -> Optional[int]:
+    if latest_gas_reading["updated_at"] == 0:
+        return None
+    return int(time.time() - latest_gas_reading["updated_at"])
+
+
 def get_latest_gas_reading(parameters=None):
+    """
+    ElevenLabs client tool.
+    AI will call this during live phone call when user asks current gas reading.
+    """
     reading = latest_gas_reading["reading"]
-    level = latest_gas_reading["level"]
+
+    if reading is None:
+        return "No live gas sensor reading has been received from the device yet."
+
+    age = get_reading_age_seconds()
 
     return (
-        f"The latest gas sensor reading is {reading}. "
-        f"The current safety level is: {level}."
+        f"The latest live gas sensor reading from the device is {reading}. "
+        f"The current safety level is {latest_gas_reading['level']}. "
+        f"The gas trend is {latest_gas_reading['trend']}. "
+        f"This reading was updated about {age} seconds ago."
     )
 
 
@@ -80,6 +115,7 @@ async def root():
     return {
         "message": "Twilio-ElevenLabs Integration Server",
         "latest_reading": latest_gas_reading,
+        "reading_age_seconds": get_reading_age_seconds(),
     }
 
 
@@ -99,13 +135,15 @@ async def handle_incoming_call(request: Request):
 
     response = VoiceResponse()
     connect = Connect()
-    connect.stream(url=f"wss://{ngrok}/media-stream-eleven/{customer_name}/{language}")
+    connect.stream(
+        url=f"wss://{NGROK_URL}/media-stream-eleven/{customer_name}/{language}"
+    )
     response.append(connect)
 
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 
-# --- ElevenLabs Client Tools ---
+# ---------------- ELEVENLABS CLIENT TOOLS ----------------
 def trigger_browser_alert(parameters):
     message = parameters.get("message")
     print(f"Triggering alert: {message}")
@@ -127,6 +165,18 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
 
     current_reading = latest_gas_reading["reading"]
     current_level = latest_gas_reading["level"]
+    current_trend = latest_gas_reading["trend"]
+
+    if current_reading is None:
+        first_reading_text = (
+            "I have not received a live gas reading from the device yet, "
+            "but a gas alert has been triggered."
+        )
+    else:
+        first_reading_text = (
+            f"The current live gas reading from the device is {current_reading}. "
+            f"The level is {current_level}, and the trend is {current_trend}."
+        )
 
     conversation_override = {
         "agent": {
@@ -135,11 +185,13 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                     "You are Ahmed, a smart home gas safety assistant. "
                     "A critical gas leak has been detected in Azfar's house. "
                     "Speak in clear English only. Be urgent, serious, and concise. "
-                    f"At the start of this call, the gas reading was {current_reading}, "
-                    f"and the safety level was {current_level}. "
-                    "If Azfar asks about the current gas level, latest gas reading, "
-                    "or whether the gas level is safe or dangerous, use the tool "
-                    "getLatestGasReading before answering. "
+                    f"At the start of this call: {first_reading_text} "
+                    "Very important: when Azfar asks about the current gas reading, "
+                    "latest gas reading, gas level, gas pressure, whether the reading "
+                    "is increasing or decreasing, or whether the situation is safe or dangerous, "
+                    "you MUST call the getLatestGasReading tool before answering. "
+                    "Do not answer gas reading questions from memory. "
+                    "Always fetch the latest live reading using getLatestGasReading first. "
                     "Tell Azfar to turn off the gas supply if safe, avoid electrical switches, "
                     "open windows if possible, and leave the area carefully. "
                     "If the user says the issue is fixed, return to a calm tone."
@@ -147,8 +199,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
             },
             "first_message": (
                 f"Hello Azfar, Ahmed speaking. A critical gas leak has been detected "
-                f"in your house. The current gas reading is {current_reading}, "
-                f"and the level is {current_level}. Please avoid electrical switches, "
+                f"in your house. {first_reading_text} Please avoid electrical switches, "
                 f"open windows if possible, and leave the area carefully."
             ),
             "language": "en",
@@ -217,7 +268,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                 traceback.print_exc()
 
 
-# --- Global Call State ---
+# ---------------- CALL STATE ----------------
 call_state = {
     "is_active": False,
     "last_call_time": 0.0,
@@ -234,11 +285,11 @@ async def make_outbound_call(customer_name: str, language: str, number: str):
 
     try:
         redirect_url = (
-            f"https://{ngrok}/twilio/inbound_call"
+            f"https://{NGROK_URL}/twilio/inbound_call"
             f"?CustomerName={customer_name}&Language={language}"
         )
 
-        status_callback_url = f"https://{ngrok}/twilio/call-status"
+        status_callback_url = f"https://{NGROK_URL}/twilio/call-status"
 
         twiml_response = VoiceResponse()
         twiml_response.redirect(redirect_url, method="POST")
@@ -267,6 +318,7 @@ async def make_outbound_call(customer_name: str, language: str, number: str):
             "CallSid": call.sid,
             "to": number,
             "from": TWILIO_PHONE_NUMBER,
+            "latest_reading": latest_gas_reading,
         }
 
     except Exception as e:
@@ -293,46 +345,77 @@ async def call_status_webhook(request: Request):
     return {"status": "ok"}
 
 
-# --- NodeMCU sends latest gas reading here ---
+# ---------------- NODEMCU ENDPOINTS ----------------
+
 @app.api_route("/update-reading", methods=["GET", "POST"])
 async def update_reading(reading: int):
+    """
+    NodeMCU sends live gas reading here.
+    Example: /update-reading?reading=180
+    """
     save_latest_reading(reading)
 
     print(
-        f"📡 Live gas reading updated: {reading} | "
-        f"Level: {latest_gas_reading['level']}"
+        f"📡 Live gas reading updated from device: {reading} | "
+        f"Level: {latest_gas_reading['level']} | "
+        f"Trend: {latest_gas_reading['trend']}"
     )
 
     return {
         "status": "updated",
         "reading": latest_gas_reading["reading"],
+        "previous_reading": latest_gas_reading["previous_reading"],
         "level": latest_gas_reading["level"],
+        "trend": latest_gas_reading["trend"],
         "updated_at": latest_gas_reading["updated_at"],
+        "reading_age_seconds": get_reading_age_seconds(),
     }
 
 
-# --- NodeMCU checks call status here ---
-# User requested /call-status instead of /check-call-status
 @app.get("/call-status")
 async def call_status_for_nodemcu():
+    """
+    NodeMCU checks whether call is active.
+    User requested /call-status, not /check-call-status.
+    """
     return {
         "active": call_state["is_active"],
         "latest_reading": latest_gas_reading["reading"],
+        "previous_reading": latest_gas_reading["previous_reading"],
         "level": latest_gas_reading["level"],
+        "trend": latest_gas_reading["trend"],
         "updated_at": latest_gas_reading["updated_at"],
+        "reading_age_seconds": get_reading_age_seconds(),
     }
 
 
-# --- NodeMCU triggers gas alert call here ---
 @app.get("/trigger-gas-alert")
-async def trigger_gas_alert(reading: int = 0):
+async def trigger_gas_alert(reading: Optional[int] = None):
+    """
+    NodeMCU triggers gas alert call here.
+    Example: /trigger-gas-alert?reading=180
+    """
     current_time = time.time()
 
-    if reading > 0:
+    if reading is not None:
         save_latest_reading(reading)
         print(
-            f"⚠️ Alert reading received: {reading} | "
-            f"Level: {latest_gas_reading['level']}"
+            f"⚠️ Alert reading received from device: {reading} | "
+            f"Level: {latest_gas_reading['level']} | "
+            f"Trend: {latest_gas_reading['trend']}"
+        )
+
+    if latest_gas_reading["reading"] is None:
+        return {
+            "status": "error",
+            "reason": "no_device_reading_received_yet",
+            "message": "Send /update-reading?reading=VALUE or /trigger-gas-alert?reading=VALUE from NodeMCU first.",
+        }
+
+    if not TARGET_PHONE_NUMBER:
+        raise HTTPException(
+            status_code=500,
+            detail="TARGET_PHONE_NUMBER is missing in Render environment variables.",
         )
 
     if call_state["is_active"]:
@@ -341,6 +424,7 @@ async def trigger_gas_alert(reading: int = 0):
             "reason": "call_in_progress",
             "reading": latest_gas_reading["reading"],
             "level": latest_gas_reading["level"],
+            "trend": latest_gas_reading["trend"],
         }
 
     if (current_time - call_state["last_success_time"]) < 10:
@@ -349,6 +433,7 @@ async def trigger_gas_alert(reading: int = 0):
             "reason": "already_acknowledged",
             "reading": latest_gas_reading["reading"],
             "level": latest_gas_reading["level"],
+            "trend": latest_gas_reading["trend"],
         }
 
     if (current_time - call_state["last_call_time"]) < 30:
@@ -357,12 +442,18 @@ async def trigger_gas_alert(reading: int = 0):
             "reason": "cooldown_active",
             "reading": latest_gas_reading["reading"],
             "level": latest_gas_reading["level"],
+            "trend": latest_gas_reading["trend"],
         }
 
-    print("⚠️ GAS ALERT RECEIVED! Initiating Call...")
+    print(
+        f"⚠️ GAS ALERT RECEIVED! Calling with live device reading: "
+        f"{latest_gas_reading['reading']} | "
+        f"{latest_gas_reading['level']} | "
+        f"{latest_gas_reading['trend']}"
+    )
 
     return await make_outbound_call(
-        customer_name="Azfar",
+        customer_name="Sarim",
         language="en",
         number=TARGET_PHONE_NUMBER,
     )
