@@ -12,7 +12,6 @@ from twilio.twiml.voice_response import VoiceResponse, Connect
 from elevenlabs import ElevenLabs
 from elevenlabs.conversational_ai.conversation import (
     Conversation,
-    ClientTools,
     ConversationInitiationData,
 )
 from twilio_audio_interface import TwilioAudioInterface
@@ -32,9 +31,8 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 # project-api-phone-call-agent.onrender.com
 NGROK_URL = os.getenv("NGROK_URL", "")
 
-# Better: Render env mein TARGET_PHONE_NUMBER set karo
-# Example: +923442862596
-TARGET_PHONE_NUMBER = "+923442862596"
+# Render env mein TARGET_PHONE_NUMBER bhi set kar sakte ho
+TARGET_PHONE_NUMBER = os.getenv("TARGET_PHONE_NUMBER", "+923442862596")
 
 
 def clean_domain(value: str) -> str:
@@ -102,49 +100,7 @@ def get_reading_age_seconds() -> Optional[int]:
     return int(time.time() - latest_gas_reading["updated_at"])
 
 
-# ---------------- ELEVENLABS CLIENT TOOL ----------------
-def get_latest_gas_reading(parameters=None):
-    """
-    ElevenLabs client tool.
-    This must return the latest live reading from server memory.
-    """
-    reading = latest_gas_reading["reading"]
-
-    print("🧰 getLatestGasReading TOOL CALLED")
-    print(f"🧰 Latest reading memory: {latest_gas_reading}")
-
-    if reading is None:
-        result = (
-            "Current gas reading is not available yet. "
-            "No live reading has been received from the device."
-        )
-        print(f"🧰 TOOL RESULT: {result}")
-        return result
-
-    age = get_reading_age_seconds()
-
-    result = (
-        f"Current gas reading is {reading}. "
-        f"Status is {latest_gas_reading['level']}. "
-        f"Trend is {latest_gas_reading['trend']}. "
-        f"This is the latest live sensor reading, updated {age} seconds ago."
-    )
-
-    print(f"🧰 TOOL RESULT: {result}")
-    return result
-
-
-def trigger_browser_alert(parameters):
-    message = parameters.get("message", "")
-    print(f"Triggering alert: {message}")
-    return "Alert triggered successfully"
-
-
-client_tools = ClientTools()
-client_tools.register("getLatestGasReading", get_latest_gas_reading)
-client_tools.register("triggerBrowserAlert", trigger_browser_alert)
-
-
+# ---------------- ROOT / DEBUG ----------------
 @app.get("/")
 async def root():
     return {
@@ -159,6 +115,54 @@ async def latest_reading_debug():
     return {
         "latest_reading": latest_gas_reading,
         "reading_age_seconds": get_reading_age_seconds(),
+    }
+
+
+# ---------------- ELEVENLABS SERVER TOOL ENDPOINT ----------------
+@app.get("/elevenlabs/latest-gas-reading")
+async def elevenlabs_latest_gas_reading():
+    """
+    ElevenLabs Server Tool will call this endpoint.
+    This returns the latest live gas reading from Render memory.
+    """
+    reading = latest_gas_reading["reading"]
+
+    print("🔧 ELEVENLABS SERVER TOOL HIT")
+    print(f"🔧 Latest reading memory: {latest_gas_reading}")
+
+    if reading is None:
+        answer = (
+            "Current gas reading is not available yet. "
+            "No live reading has been received from the device."
+        )
+
+        print(f"🔧 TOOL ANSWER: {answer}")
+
+        return {
+            "answer": answer,
+            "reading": None,
+            "status": "NO DEVICE READING YET",
+            "trend": "UNKNOWN",
+            "age_seconds": None,
+        }
+
+    age = get_reading_age_seconds()
+
+    answer = (
+        f"Current gas reading is {reading}. "
+        f"Status is {latest_gas_reading['level']}. "
+        f"Trend is {latest_gas_reading['trend']}. "
+        f"Last updated {age} seconds ago."
+    )
+
+    print(f"🔧 TOOL ANSWER: {answer}")
+
+    return {
+        "answer": answer,
+        "reading": reading,
+        "status": latest_gas_reading["level"],
+        "trend": latest_gas_reading["trend"],
+        "age_seconds": age,
     }
 
 
@@ -205,8 +209,8 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
     eleven_labs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
     # IMPORTANT:
-    # Do NOT put old gas reading in prompt or first_message.
-    # Otherwise AI may keep repeating old 183/138 reading.
+    # Yahan old reading inject nahi karni.
+    # Warna AI 126/145/183 ko memory bana ke repeat karega.
     conversation_override = {
         "agent": {
             "prompt": {
@@ -214,21 +218,22 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                     "You are Ahmed, a smart home gas safety assistant. "
                     "Speak in clear English only. Be serious, concise, and direct. "
 
-                    "A gas leak alert was triggered in Sarim house. "
+                    "A gas leak alert was triggered in Sarim's house. "
                     "The first alert reading may become old within seconds, so never treat "
                     "the first alert reading as the current reading forever. "
 
                     "CRITICAL RULE: Whenever the user asks for the current gas reading, "
-                    "latest gas reading, gas level, gas pressure, current sensor value, "
+                    "latest gas reading, gas rating, gas level, gas pressure, current sensor value, "
                     "current status, whether it is safe, whether gas is increasing or decreasing, "
-                    "you MUST call the getLatestGasReading tool first. "
+                    "you MUST call the getLatestGasReading server tool first. "
 
                     "Do not answer current reading questions from memory. "
                     "Do not use any old reading from the start of the call. "
                     "Do not say 'I am fetching', 'let me check', 'one moment', "
                     "'I will fetch', or similar filler. "
+                    "Do not say the tool is unavailable. "
 
-                    "After the getLatestGasReading tool returns, immediately speak the returned result directly. "
+                    "After the getLatestGasReading server tool returns, immediately speak the answer field directly. "
                     "Example: 'Current gas reading is 57. Status is SAFE. Trend is STABLE.' "
 
                     "If the tool says SAFE, tell the user the current environment is safe. "
@@ -240,7 +245,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                 )
             },
             "first_message": (
-                "Hello Sarim, Ahmed speaking. A gas leak alert was triggered in your house. "
+                f"Hello {customer_name}, Ahmed speaking. A gas leak alert was triggered in your house. "
                 "Please avoid electrical switches, open windows if possible, and leave the area carefully. "
                 "When you ask me for the current gas reading, I will check the live sensor reading and tell you directly."
             ),
@@ -279,7 +284,6 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
             agent_id=ELEVENLABS_AGENT_ID,
             requires_auth=False,
             audio_interface=audio_interface,
-            client_tools=client_tools,
             config=config,
             callback_agent_response=on_agent_response,
             callback_user_transcript=on_user_transcript,
