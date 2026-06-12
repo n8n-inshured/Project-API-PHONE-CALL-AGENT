@@ -97,16 +97,19 @@ def get_latest_gas_reading(parameters=None):
     """
     reading = latest_gas_reading["reading"]
 
+    print("🧰 getLatestGasReading TOOL CALLED")
+    print(f"🧰 Latest reading memory: {latest_gas_reading}")
+
     if reading is None:
-        return "No live gas sensor reading has been received from the device yet."
+        return "Current gas reading is not available yet. No live reading has been received from the device."
 
     age = get_reading_age_seconds()
 
     return (
-        f"The latest live gas sensor reading from the device is {reading}. "
-        f"The current safety level is {latest_gas_reading['level']}. "
-        f"The gas trend is {latest_gas_reading['trend']}. "
-        f"This reading was updated about {age} seconds ago."
+        f"Current gas reading is {reading}. "
+        f"Safety level is {latest_gas_reading['level']}. "
+        f"Trend is {latest_gas_reading['trend']}. "
+        f"Last updated {age} seconds ago."
     )
 
 
@@ -183,6 +186,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
             "prompt": {
                 "prompt": (
                     "You are Ahmed, a smart home gas safety assistant. "
+                    "Very important: When the user asks for the current gas reading, latest gas reading, gas level, gas pressure, or whether it is safe or dangerous, silently call the getLatestGasReading tool first. Do not say 'I am fetching', 'let me check', or 'one moment'. After the tool returns, immediately speak the returned result directly. Example answer: 'Current gas reading is 70. Safety level is SAFE. Trend is DECREASING.' "
                     "A critical gas leak has been detected in Azfar's house. "
                     "Speak in clear English only. Be urgent, serious, and concise. "
                     f"At the start of this call: {first_reading_text} "
