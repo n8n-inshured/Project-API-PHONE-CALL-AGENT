@@ -32,7 +32,7 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 NGROK_URL = os.getenv("NGROK_URL", "")
 
 # Render env mein TARGET_PHONE_NUMBER bhi set kar sakte ho
-TARGET_PHONE_NUMBER = "+923442862596"
+TARGET_PHONE_NUMBER = "+923292218467"
 
 
 def clean_domain(value: str) -> str:
@@ -215,7 +215,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
         "agent": {
             "prompt": {
                 "prompt": (
-                    "You are Ahmed, a smart home gas safety assistant. "
+                    "You are Sara, a smart home gas safety assistant. "
                     "Speak in clear English only. Be serious, concise, and direct. "
 
                     "A gas leak alert was triggered in Sarim's house. "
