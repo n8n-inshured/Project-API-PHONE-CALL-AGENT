@@ -165,7 +165,7 @@ async def latest_reading_debug():
 # ---------------- TWILIO INBOUND / ANSWERED CALL ----------------
 @app.post("/twilio/inbound_call")
 async def handle_incoming_call(request: Request):
-    customer_name = request.query_params.get("CustomerName", "Azfar")
+    customer_name = request.query_params.get("CustomerName", "Sarim")
     language = request.query_params.get("Language", "en")
 
     form_data = await request.form()
@@ -214,7 +214,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                     "You are Ahmed, a smart home gas safety assistant. "
                     "Speak in clear English only. Be serious, concise, and direct. "
 
-                    "A gas leak alert was triggered in Azfar's house. "
+                    "A gas leak alert was triggered in Sarim house. "
                     "The first alert reading may become old within seconds, so never treat "
                     "the first alert reading as the current reading forever. "
 
@@ -240,7 +240,7 @@ async def handle_media_stream(websocket: WebSocket, customer_name: str, language
                 )
             },
             "first_message": (
-                "Hello Azfar, Ahmed speaking. A gas leak alert was triggered in your house. "
+                "Hello Sarim, Ahmed speaking. A gas leak alert was triggered in your house. "
                 "Please avoid electrical switches, open windows if possible, and leave the area carefully. "
                 "When you ask me for the current gas reading, I will check the live sensor reading and tell you directly."
             ),
@@ -506,7 +506,7 @@ async def trigger_gas_alert(reading: Optional[int] = None):
     )
 
     return await make_outbound_call(
-        customer_name="Azfar",
+        customer_name="Sarim",
         language="en",
         number=TARGET_PHONE_NUMBER,
     )
